@@ -1,13 +1,7 @@
 # Load packages
+library(tidyverse)  
 library(msm)
-library(dplyr)
-library(tidyr)
-library(purrr)
-library(ggplot2)
-library(readr)
-library(stringr)
 library(patchwork)
-library(grid)
 library(ggridges)
 library(GGally)
 
