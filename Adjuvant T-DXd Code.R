@@ -1084,7 +1084,7 @@ p_any_ILD_TDXd_draw <- draw_prob_logitnormal(
   n_sim = n_sim
 )
 
-# Any-grade ILD probability over treatment window: T-DM1; flat prior used
+# Any-grade ILD probability over treatment window: T-DM1; uniform Beta(1,1) prior
 p_any_ILD_TDM1_draw <- rbeta(
   n = n_sim,
   shape1 = any_ild_TDM1 + 1,
