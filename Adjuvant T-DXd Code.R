@@ -709,40 +709,25 @@ df_targets <- targets_endpoints %>%
     lb      = lower,
     ub      = upper
   )
-df_targets$Outcome <- factor(df_targets$Outcome, 
-                             levels = c("iDFS", "DRFI", "OS"))
-
-# Predict endpoints for one posterior draw and arm
-pred_one <- function(par_row, arm) {
-  
-  out <- predict_all_endpoints_calib(
-    par_vec     = par_row,
-    base_params = l_params_calib,
-    arm         = arm
-  )
-  
-  c(
-    iDFS = as.numeric(out$iDFS),
-    DRFI = as.numeric(out$DRFI),
-    OS   = as.numeric(out$OS)
-  )
-}
-
-post_param_draws <- post_draws
+df_targets$Outcome <- factor(df_targets$Outcome, levels = c("iDFS", "DRFI", "OS"))
 
 # Generate endpoint predictions across all posterior draws for each arm
-pred_rows <- lapply(levels(targets_endpoints$arm), function(arm) {
-  
-  pred_mat <- t(apply(post_param_draws, 1,
-                      function(par_row) {
-                        pred_one(par_row = par_row, arm = arm)
-                      }))
+pred_rows <- lapply(arms, function(arm) {
+    pred_mat <- t(apply(post_draws, 1, function(par_row) {
+        out <- predict_all_endpoints_calib(
+            par_vec     = par_row,
+            base_params = l_params_calib,
+            arm         = arm
+        )
+        
+        c(iDFS = as.numeric(out$iDFS), 
+          DRFI = as.numeric(out$DRFI),
+          OS   = as.numeric(out$OS))
+        }))
   
   colnames(pred_mat) <- c("iDFS", "DRFI", "OS")
   
-  data.frame(Arm  = arm,
-             pred_mat,
-             check.names = FALSE)
+  data.frame(Arm = arm, pred_mat, check.names = FALSE)
 })
 
 df_pred_wide <- bind_rows(pred_rows)
@@ -774,30 +759,17 @@ df_plot$Type    <- factor(df_plot$Type, levels = c("Model", "Target"))
 df_plot_int <- df_plot %>%
   select(Type, Arm, Outcome, time, value, lb, ub)
 
-pd <- position_dodge(width = 0.55)
-
 ggplot(df_plot_int, aes(x = Outcome, y = value, ymin = lb, ymax = ub,
                         color = Type, group = Type)) +
-  geom_errorbar(position = pd, width = 0.18,
-                linewidth = 0.9
-  ) +
-  geom_point(
-    position = pd,
-    size = 2.5
-  ) +
-  facet_wrap(~ Arm) +
-  scale_y_continuous(
-    "3-year probability",
-    limits = c(0, 1)
-  ) +
-  theme_bw(base_size = 18) +
-  theme(legend.position = "bottom") +
-  scale_color_manual(
-    values = c(
-      Model = "steelblue3",
-      Target = "black"
-    )
-  )
+    geom_errorbar(position = position_dodge(width = 0.55), width = 0.18,
+                  linewidth = 0.9) +
+    geom_point(position = position_dodge(width = 0.55), size = 2.5) +
+    facet_wrap(~ Arm) +
+    scale_y_continuous(limits = c(0, 1)) +
+    labs(y = "3-year probability") +
+    theme_bw(base_size = 18) +
+    theme(legend.position = "bottom") +
+    scale_color_manual(values = c(Model = "steelblue3", Target = "black"))
 
 # Posterior-mean calibrated or derived parameters
 haz_RF_DR_TDM1_post <- as.numeric(v_calib_post_mean["haz_RF_DR_base"])
@@ -1760,3 +1732,4 @@ psa_plots[["Persistent through year 10"]]
 #    dpi = 600,
 #    quality = 100
 #)
+
