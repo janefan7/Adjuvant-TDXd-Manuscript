@@ -245,7 +245,7 @@ run_markov_model <- function(params, compute_drfi = FALSE) {
   names(v_m_init) <- state_names
   v_m_init["RF_on"] <- 1
   
-  # Initialize output
+  # Initialize outputs
   out_os <- rep(0, length(strategy_names))
   names(out_os) <- strategy_names
   out_idfs <- rep(0, length(strategy_names))
@@ -258,12 +258,23 @@ run_markov_model <- function(params, compute_drfi = FALSE) {
   names(out_ild_death) <- strategy_names
   out_oc_death <- rep(0, length(strategy_names))
   names(out_oc_death) <- strategy_names
+  out_ly <- rep(0, length(strategy_names))
+  names(out_ly) <- strategy_names
+  out_rf_time <- rep(0, length(strategy_names))
+  names(out_rf_time) <- strategy_names
+  out_lrr_time <- rep(0, length(strategy_names))
+  names(out_lrr_time) <- strategy_names
+  out_dr_time <- rep(0, length(strategy_names))
+  names(out_dr_time) <- strategy_names
   
   # All RF states
   rf_states <- c("RF_on", post_ild_state_names, "RF_offtx_complete")
   
   # At-risk states for first DR
   dr_risk_states <- c(rf_states, "LRR")
+  
+  # Alive states
+  alive_states <- c(rf_states, "LRR", "DR")
   
   # Number of cycles
   n_cycles <- as.integer(round(params$horizon_years / params$delta))
@@ -280,17 +291,21 @@ run_markov_model <- function(params, compute_drfi = FALSE) {
     # to calculate DRFI among patients at risk of first DR if compute_DRFI = T
     cum_haz_DR <- 0
     
+    # Initialize time spent in each state
+    state_time <- rep(0, n_states)
+    names(state_time) <- state_names
+    
     for (t in seq_len(n_cycles)) {
       
       # Obtain transition intensity matrix
       Q_t <- build_Q_matrix(t = t, arm = arm, params = params)
       
-      # Distribution halfway through the cycle for the DR risk set for a better
-      # approximation
+      # Distribution halfway through the cycle
+      P_mid_t <- msm::MatrixExp(Q_t / 2)
+      m_mid_t <- as.numeric(m_trace[t, ] %*% P_mid_t)
+      names(m_mid_t) <- state_names
+      
       if (compute_drfi) {
-        P_mid_t <- msm::MatrixExp(Q_t / 2)
-        m_mid_t <- as.numeric(m_trace[t, ] %*% P_mid_t)
-        names(m_mid_t) <- state_names
         
         # Cause-specific DR hazard midway through cycle among patients
         # in DR at-risk states
@@ -304,6 +319,9 @@ run_markov_model <- function(params, compute_drfi = FALSE) {
           cum_haz_DR <- cum_haz_DR + haz_DR_mid
         }
       }
+      
+      # Expected time spent in each state during the cycle
+      state_time <- state_time + m_mid_t * params$delta
       
       # Advance cohort trace
       P_t <- msm::MatrixExp(Q_t)
@@ -321,6 +339,7 @@ run_markov_model <- function(params, compute_drfi = FALSE) {
     # Obtain cohort trace at 10 years
     final_trace <- m_trace[n_cycles + 1, ]
     
+    
     # Obtain arm-specific clinical outcomes at 10 years
     out_os[arm]   <- 1 - sum(final_trace[death_states])
     out_idfs[arm] <- sum(final_trace[rf_states])
@@ -332,11 +351,16 @@ run_markov_model <- function(params, compute_drfi = FALSE) {
     out_bc_death[arm] <- sum(final_trace["BC_Death"])
     out_ild_death[arm] <- sum(final_trace["ILD_Death"])
     out_oc_death[arm] <- sum(final_trace["OC_Death"])
+    out_rf_time[arm] <- sum(state_time[rf_states])
+    out_lrr_time[arm] <- sum(state_time["LRR"])
+    out_dr_time[arm] <- sum(state_time["DR"])
+    out_ly[arm] <- sum(state_time[alive_states])
   }
   
   # Return outputs
   list(OS = out_os, iDFS = out_idfs, DRFI = out_drfi, 
-       BC_death = out_bc_death, ILD_death = out_ild_death, OC_death = out_oc_death)
+       BC_death = out_bc_death, ILD_death = out_ild_death, OC_death = out_oc_death,
+       LY = out_ly, RF_time = out_rf_time, LRR_time = out_lrr_time, DR_time = out_dr_time)
 }
 
 ## Setup for IMIS calibration
@@ -353,7 +377,7 @@ targets_endpoints <- data.frame(
          arm = factor(arm, levels = c("TDM1", "TDXd")),
          outcome = factor(outcome, levels = c("iDFS", "DRFI", "OS")))
 
-# Specify LRR share informed by DB-05 as a separate target
+# Specify LRR share informed by DB-05 and clinical expertise as a separate target
 target_LRR_share <- data.frame(value = 0.10, lower = 0.08, upper = 0.12) %>%
   mutate(se_logit = (qlogis(upper) - qlogis(lower)) / (2 * 1.96))
 
@@ -628,9 +652,9 @@ param_order <- c(
 
 param_labels <- c(
   haz_RF_DR_base = "RF to DR hazard\n(T-DM1)",
-  LRR_share = "LRR share\nof first recurrences",
+  LRR_share = "Proportion of first recurrences that were locoregional",
   LRR_DR_multiplier = "LRR to DR multiplier",
-  haz_DR_BCd_base = "DR to BC death\nhazard",
+  haz_DR_BCd_base = "DR to BC death hazard",
   hr_RF_DR_TDXd_vs_TDM1 = "HR for RF to DR\n(T-DXd vs T-DM1)"
 )
 
@@ -648,10 +672,10 @@ gg_post_pairs_corr <- GGally::ggpairs(
   ),
   columnLabels = unname(param_labels[param_order])
 ) +
-  theme_bw(base_size = 14.5) +
+  theme_bw(base_size = 11) +
   theme(
     axis.title.x = element_blank(),
-    axis.text.x  = element_text(size = 9.5),
+    axis.text.x  = element_text(size = 8),
     axis.title.y = element_blank(),
     axis.text.y  = element_blank(),
     axis.ticks.y = element_blank(),
@@ -661,16 +685,16 @@ gg_post_pairs_corr <- GGally::ggpairs(
 
 print(gg_post_pairs_corr)
 
-# Prior vs posterior densities
+# Prior vs posterior distributions of calibrated parameters
 m_samp_prior <- sample.prior(n_resamp)
 
 df_samp_prior <- reshape2::melt(
-  cbind(PDF = "Prior", as.data.frame(m_samp_prior)),
+  cbind(Distribution = "Prior", as.data.frame(m_samp_prior)),
   variable.name = "Parameter"
 )
 
 df_samp_post_imis <- reshape2::melt(
-  cbind(PDF = "Posterior IMIS", as.data.frame(m_calib_res[, v_param_names])),
+  cbind(Distribution = "Posterior IMIS", as.data.frame(m_calib_res[, v_param_names])),
   variable.name = "Parameter"
 )
 
@@ -687,7 +711,7 @@ df_samp_prior_post <-
 
 gg_prior_post_imis <- ggplot(
   df_samp_prior_post,
-  aes(x = value, y = after_stat(density), fill = PDF)
+  aes(x = value, y = after_stat(density), fill = Distribution)
 ) +
   facet_wrap(
     ~ Parameter,
@@ -696,7 +720,7 @@ gg_prior_post_imis <- ggplot(
   ) +
   scale_x_continuous(n.breaks = 6) +
   geom_density(alpha = 0.5) +
-  theme_bw(base_size = 16) +
+  theme_bw(base_size = 14) +
   theme(
     legend.position = "bottom",
     axis.title.x = element_blank(),
@@ -778,7 +802,10 @@ df_model_sum <- df_pred_long %>%
 df_plot <- bind_rows(df_targets, df_model_sum) %>%
   mutate(
     Outcome = factor(Outcome, levels = c("iDFS", "DRFI", "OS")),
-    Type    = factor(Type, levels = c("Model", "Target"))
+    Type    = factor(Type, levels = c("Model", "Target")),
+    Arm = recode(Arm,
+                 "TDXd" = "T-DXd",
+                 "TDM1" = "T-DM1")
   ) %>%
   select(Type, Arm, Outcome, time, value, lb, ub)
 
@@ -851,20 +878,20 @@ l_params_all <- list(
 )
 saveRDS(l_params_all, "l_params_all_basecase.rds")
 
-## Map DR hazard to RCB categories and HR subgroups
+## Map DR hazard to RCB categories and ER subgroups
 # 5-year scaled T-DM1 (baseline) EFS from Yau et al
 RCB_EFS_scaled <- data.frame(
   RCB = c("RCB-I", "RCB-II", "RCB-III", "RCB-I", "RCB-II", "RCB-III"),
-  HR_status = c("HR-/HER2+", "HR-/HER2+", "HR-/HER2+", "HR+/HER2+", "HR+/HER2+", "HR+/HER2+"),
+  ER_status = c("ER-/HER2+", "ER-/HER2+", "ER-/HER2+", "ER+/HER2+", "ER+/HER2+", "ER+/HER2+"),
   EFS_5y_TDM1 = c(1 - 0.084, 1 - 0.221, 1 - 0.241, 1 - 0.050, 1 - 0.138, 1 - 0.283)
 ) %>%
   mutate(
     RCB = factor(RCB, levels = c("RCB-I", "RCB-II", "RCB-III")),
-    HR_status = factor(HR_status, levels = c("HR-/HER2+", "HR+/HER2+"))
+    ER_status = factor(ER_status, levels = c("ER-/HER2+", "ER+/HER2+"))
   )
 
-# Grid search to find multiplier applied to DR hazard that most closely reproduce
-# scaled EFS estimates
+# Root-finding approach to find multiplier applied to DR and LRR hazards that most closely reproduce
+# scaled Yau et al EFS estimates
 # recurrence_multiplier_grid <- seq(0.01, 10, length.out = 1000)
 # Given that the DR hazard is likely to be small, we can use a log-spaced grid 
 # to better capture the lower end of the multiplier range
@@ -920,11 +947,12 @@ RCB_EFS_scaled_multiplier
 # Save results
 saveRDS(RCB_EFS_scaled_multiplier, "RCB_EFS_scaled_multiplier.rds")
 
-# Highest-risk T-DM1 RCB/HR subgroup
+# Highest-risk T-DM1 RCB/ER subgroup
 haz_RF_DR_max <- max(RCB_EFS_scaled_multiplier$haz_RF_DR_TDM1)
 
 # Apply calibrated LRR to DR hazard ratio in the highest-risk subgroup
 haz_LRR_DR_common <- as.numeric(l_params_all$LRR_DR_multiplier * haz_RF_DR_max)
+
 
 # Treatment persistence scenarios
 treatment_effect_scenarios <- data.frame(persistence_scenario = c("Effect ends at year 3",
@@ -969,7 +997,7 @@ det_scenarios <- list(
 det_scenario_order <- names(det_scenarios)
 
 ## Optional deterministic analyses (not described in manuscript)
-# Evaluate each scenario across RCB categories and HR subgroups
+# Evaluate each scenario across RCB categories and ER subgroups
 eval_os_RCB <- function(params,
                         det_scenario_name,
                         det_scenario_modify = function(params) params) {
@@ -982,7 +1010,7 @@ eval_os_RCB <- function(params,
   for (j in seq_len(nrow(treatment_effect_scenarios))) {
     persistence_row <- treatment_effect_scenarios[j, ]
     
-    # Loop over all DR multipliers (corresponding to RCB/HR subgroups)
+    # Loop over all DR multipliers (corresponding to RCB/ER subgroups)
     for (i in seq_len(nrow(RCB_EFS_scaled_multiplier))) {
       
       multiplier_row <- RCB_EFS_scaled_multiplier[i, ]
@@ -993,10 +1021,10 @@ eval_os_RCB <- function(params,
       current_params$hr_full_effect_years <- persistence_row$hr_full_effect_years
       current_params$hr_wane_end_year <- persistence_row$hr_wane_end_year
       
-      # Set RCB/HR-specific baseline T-DM1 DR hazard
+      # Set RCB/ER-specific baseline T-DM1 DR hazard
       current_params$haz_RF_DR_TDM1 <- multiplier_row$haz_RF_DR_TDM1
       
-      # Set RCB/HR-specific LRR hazard (same for T-DM1 and T-DXd)
+      # Set RCB/ER-specific LRR hazard (same for T-DM1 and T-DXd)
       current_params$haz_RF_LRR <- multiplier_row$haz_RF_LRR
       
       # Set common LRR to DR hazard (same across subgroups and treatment arms)
@@ -1012,32 +1040,24 @@ eval_os_RCB <- function(params,
       results[[result_index]] <- data.frame(
         det_scenario = det_scenario_name,
         persistence_scenario = persistence_row$persistence_scenario,
-        HR_status = multiplier_row$HR_status,
+        ER_status = multiplier_row$ER_status,
         RCB = multiplier_row$RCB,
         
-        # Overall survival difference, percentage points
+        # Overall survival difference in percentage points, T-DXd vs T-DM1
         OS_10y_TDM1 = as.numeric(outcomes_10y$OS["TDM1"]),
         OS_10y_TDXd = as.numeric(outcomes_10y$OS["TDXd"]),
-        OS_diff_pp = 100 * (as.numeric(outcomes_10y$OS["TDXd"]) - 
-                              as.numeric(outcomes_10y$OS["TDM1"])),
+        OS_diff_pp = 100 * (OS_10y_TDXd - OS_10y_TDM1),
         
-        # Breast cancer death difference, percentage points
+        # Breast cancer deaths averted with T-DXd vs T-DM1, per 1,000
         BC_death_10y_TDM1 = as.numeric(outcomes_10y$BC_death["TDM1"]),
         BC_death_10y_TDXd = as.numeric(outcomes_10y$BC_death["TDXd"]),
-        BC_death_diff_pp = 100 * (as.numeric(outcomes_10y$BC_death["TDM1"]) -
-                                    as.numeric(outcomes_10y$BC_death["TDXd"])),
+        BC_death_diff_per1000 = 1000 * (BC_death_10y_TDM1 - BC_death_10y_TDXd),
         
-        # ILD death difference, percentage points
+        # ILD deaths caused by T-DXd, per 1,000
         ILD_death_10y_TDM1 = as.numeric(outcomes_10y$ILD_death["TDM1"]),
         ILD_death_10y_TDXd = as.numeric(outcomes_10y$ILD_death["TDXd"]),
-        ILD_death_diff_pp = 100 * (as.numeric(outcomes_10y$ILD_death["TDM1"]) -
-                                     as.numeric(outcomes_10y$ILD_death["TDXd"])),
-        
-        # Other-cause death difference, percentage points
-        OC_death_10y_TDM1 = as.numeric(outcomes_10y$OC_death["TDM1"]),
-        OC_death_10y_TDXd = as.numeric(outcomes_10y$OC_death["TDXd"]),
-        OC_death_diff_pp = 100 * (as.numeric(outcomes_10y$OC_death["TDM1"]) -
-                                    as.numeric(outcomes_10y$OC_death["TDXd"]))
+        ILD_death_diff_per1000 = 1000 * (ILD_death_10y_TDXd - ILD_death_10y_TDM1)
+  
       )
       result_index <- result_index + 1
     }
@@ -1066,18 +1086,10 @@ df_os_RCB <- dplyr::bind_rows(df_os_RCB_list) %>%
   mutate(det_scenario = factor(det_scenario, levels = det_scenario_order),
          persistence_scenario = factor(persistence_scenario, levels = 
                                          treatment_effect_scenarios$persistence_scenario)) %>%
-  arrange(persistence_scenario, HR_status, RCB, det_scenario)
-
-table_os_RCB <- df_os_RCB %>%
-  mutate(OS_diff_pp = round(OS_diff_pp, 2)) %>%
-  select(persistence_scenario, det_scenario, HR_status, RCB, 
-         OS_diff_pp, BC_death_diff_pp, ILD_death_diff_pp, OC_death_diff_pp) %>%
-  arrange(persistence_scenario, det_scenario, HR_status, RCB)
-table_os_RCB
+  arrange(persistence_scenario, ER_status, RCB, det_scenario)
 
 # Save results
 saveRDS(df_os_RCB, "df_os_RCB.rds")
-saveRDS(table_os_RCB, "table_os_RCB.rds")
 
 # Named scenarios for probabilistic sensitivity analysis (PSA)
 psa_scenarios <- list(
@@ -1134,7 +1146,7 @@ hist(calib_param_draws$hr_RF_DR_TDXd_vs_TDM1)
 hist(p_any_ILD_TDXd_draw)
 hist(p_fatal_ILD_all_TDXd_draw)
 
-# Highest-risk T-DM1 RCB/HR recurrence multiplier
+# Highest-risk T-DM1 RCB/ER recurrence multiplier
 max_recurrence_multiplier <- max(RCB_EFS_scaled_multiplier$recurrence_multiplier)
 
 # Add derived quantities to posterior draws
@@ -1146,7 +1158,7 @@ calib_and_derived_draws <- calib_param_draws %>%
         # Highest-risk T-DM1 RF to DR hazard
         haz_RF_DR_max = max_recurrence_multiplier * haz_RF_DR_base,
         
-        # Common LRR -> DR hazard used in final RCB/HR model
+        # Common LRR -> DR hazard used in final RCB/ER model
         haz_LRR_DR = LRR_DR_multiplier * haz_RF_DR_max
     )
 
@@ -1172,7 +1184,7 @@ eval_os_RCB_PSA <- function(params, psa_scenario_name, psa_scenario_modify,
                             p_fatal_ILD_all_TDXd_draw) {
     results <- vector("list", nrow(RCB_EFS_scaled_multiplier))
     
-    # Loop over RCB/HR subgroups
+    # Loop over RCB/ER subgroups
     for (i in seq_len(nrow(RCB_EFS_scaled_multiplier))) {
         multiplier_row <- RCB_EFS_scaled_multiplier[i, ]
         
@@ -1193,11 +1205,11 @@ eval_os_RCB_PSA <- function(params, psa_scenario_name, psa_scenario_modify,
             hr_RF_DR_s <-
                 as.numeric(calib_and_derived_draws$hr_RF_DR_TDXd_vs_TDM1[s])
             
-            # RCB/HR-specific RF to DR hazard
+            # RCB/ER-specific RF to DR hazard
             current_params$haz_RF_DR_TDM1 <- haz_RF_DR_TDM1_base_s *
                 as.numeric(multiplier_row$recurrence_multiplier)
             
-            # RCB/HR-specific RF to LRR hazard
+            # RCB/ER-specific RF to LRR hazard
             current_params$haz_RF_LRR <- (LRR_share_s / (1 - LRR_share_s)) *
                 (haz_RF_DR_TDM1_base_s *
                      as.numeric(multiplier_row$recurrence_multiplier))
@@ -1273,31 +1285,22 @@ eval_os_RCB_PSA <- function(params, psa_scenario_name, psa_scenario_modify,
                 sim = s,
                 psa_scenario = psa_scenario_name,
                 persistence_scenario = persistence_row$persistence_scenario,
-                HR_status = multiplier_row$HR_status,
+                ER_status = multiplier_row$ER_status,
                 RCB = multiplier_row$RCB,
-                # Overall survival difference, percentage points
+                # Overall survival difference in percentage points, T-DXd vs T-DM1
                 OS_10y_TDM1 = as.numeric(outcomes_10y$OS["TDM1"]),
                 OS_10y_TDXd = as.numeric(outcomes_10y$OS["TDXd"]),
-                OS_diff_pp = 100 * (as.numeric(outcomes_10y$OS["TDXd"]) - 
-                                      as.numeric(outcomes_10y$OS["TDM1"])),
+                OS_diff_pp = 100 * (OS_10y_TDXd - OS_10y_TDM1),
               
-                # Breast cancer death difference, percentage points
+                # Breast cancer deaths averted with T-DXd vs T-DM1, per 1,000
                 BC_death_10y_TDM1 = as.numeric(outcomes_10y$BC_death["TDM1"]),
                 BC_death_10y_TDXd = as.numeric(outcomes_10y$BC_death["TDXd"]),
-                BC_death_diff_pp = 100 * (as.numeric(outcomes_10y$BC_death["TDM1"]) -
-                                            as.numeric(outcomes_10y$BC_death["TDXd"])),
+                BC_death_diff_per1000 = 1000 * (BC_death_10y_TDM1 - BC_death_10y_TDXd),
                 
-                # ILD death difference, percentage points
+                # ILD deaths caused by T-DXd, per 1,000
                 ILD_death_10y_TDM1 = as.numeric(outcomes_10y$ILD_death["TDM1"]),
                 ILD_death_10y_TDXd = as.numeric(outcomes_10y$ILD_death["TDXd"]),
-                ILD_death_diff_pp = 100 * (as.numeric(outcomes_10y$ILD_death["TDM1"]) -
-                                             as.numeric(outcomes_10y$ILD_death["TDXd"])),
-                
-                # Other-cause death difference, percentage points
-                OC_death_10y_TDM1 = as.numeric(outcomes_10y$OC_death["TDM1"]),
-                OC_death_10y_TDXd = as.numeric(outcomes_10y$OC_death["TDXd"]),
-                OC_death_diff_pp = 100 * (as.numeric(outcomes_10y$OC_death["TDM1"]) -
-                                            as.numeric(outcomes_10y$OC_death["TDXd"]))
+                ILD_death_diff_per1000 = 1000 * (ILD_death_10y_TDXd - ILD_death_10y_TDM1)
                 )
               
               result_index <- result_index + 1
@@ -1335,47 +1338,39 @@ df_os_RCB_psa <- dplyr::bind_rows(df_os_RCB_psa_list) %>%
   mutate(psa_scenario = factor(psa_scenario, levels = psa_scenario_order),
          persistence_scenario = factor(persistence_scenario,
                                        levels = treatment_effect_scenarios$persistence_scenario)) %>%
-  arrange(psa_scenario, persistence_scenario, HR_status, RCB, sim)
+  arrange(psa_scenario, persistence_scenario, ER_status, RCB, sim)
+
 
 # Summarize results of probabilistic analysis
 table_os_RCB_psa <- df_os_RCB_psa %>%
-  group_by(psa_scenario, persistence_scenario, HR_status, RCB) %>%
+  group_by(psa_scenario, persistence_scenario, ER_status, RCB) %>%
   summarise(
-    # Overall survival difference, percentage points
+    # Overall survival
     mean_OS_diff_pp = mean(OS_diff_pp, na.rm = TRUE),
     lower_OS_diff_pp = quantile(OS_diff_pp, 0.025, na.rm = TRUE),
     upper_OS_diff_pp = quantile(OS_diff_pp, 0.975, na.rm = TRUE),
     
-    # Breast cancer death difference, percentage points
-    mean_BC_death_diff_pp = mean(BC_death_diff_pp, na.rm = TRUE),
-    lower_BC_death_diff_pp = quantile(BC_death_diff_pp, 0.025, na.rm = TRUE),
-    upper_BC_death_diff_pp = quantile(BC_death_diff_pp, 0.975, na.rm = TRUE),
+    # Breast cancer death
+    mean_BC_death_diff_per1000 = mean(BC_death_diff_per1000, na.rm = TRUE),
+    lower_BC_death_diff_per1000 = quantile(BC_death_diff_per1000, 0.025, na.rm = TRUE),
+    upper_BC_death_diff_per1000 = quantile(BC_death_diff_per1000, 0.975, na.rm = TRUE),
     
-    # ILD death difference, percentage points
-    mean_ILD_death_diff_pp = mean(ILD_death_diff_pp, na.rm = TRUE),
-    lower_ILD_death_diff_pp = quantile(ILD_death_diff_pp, 0.025, na.rm = TRUE),
-    upper_ILD_death_diff_pp = quantile(ILD_death_diff_pp, 0.975, na.rm = TRUE),
-    
-    # Other-cause death difference, percentage points
-    mean_OC_death_diff_pp = mean(OC_death_diff_pp, na.rm = TRUE),
-    lower_OC_death_diff_pp = quantile(OC_death_diff_pp, 0.025, na.rm = TRUE),
-    upper_OC_death_diff_pp = quantile(OC_death_diff_pp, 0.975, na.rm = TRUE),
-    
+    # ILD death
+    mean_ILD_death_diff_per1000 = mean(ILD_death_diff_per1000, na.rm = TRUE),
+    lower_ILD_death_diff_per1000 = quantile(ILD_death_diff_per1000, 0.025, na.rm = TRUE),
+    upper_ILD_death_diff_per1000 = quantile(ILD_death_diff_per1000, 0.975, na.rm = TRUE),
+  
     # Percent favoring T-DXd
     pct_favors_TDXd_OS = 100 * mean(OS_diff_pp > 0, na.rm = TRUE),
-    pct_BC_death_favors_TDXd = 100 * mean(BC_death_diff_pp > 0, na.rm = TRUE),
-    pct_ILD_death_favors_TDXd = 100 * mean(ILD_death_diff_pp > 0, na.rm = TRUE),
-    pct_OC_death_favors_TDXd = 100 * mean(OC_death_diff_pp > 0, na.rm = TRUE),
 
     .groups = "drop"
   ) %>%
-  arrange(psa_scenario, persistence_scenario, HR_status, RCB)
-
+  arrange(psa_scenario, persistence_scenario, ER_status, RCB)
 table_os_RCB_psa
 
 # Save results
-saveRDS(df_os_RCB_psa, "df_os_RCB_PSA.rds")
-saveRDS(table_os_RCB_psa, "table_os_RCB_PSA.rds")
+saveRDS(df_os_RCB_psa, "df_os_RCB_psa.rds")
+saveRDS(table_os_RCB_psa, "table_os_RCB_psa.rds")
 
 ## One-way ILD threshold analysis
 threshold_RCB <- function(params,
@@ -1390,7 +1385,7 @@ threshold_RCB <- function(params,
   for (i in seq_len(nrow(treatment_effect_scenarios))){
     persistence_row <- treatment_effect_scenarios[i, ]
     
-    # Loop over RCB/HR subgroups
+    # Loop over RCB/ER subgroups
     for (j in seq_len(nrow(multiplier_grid))){
       multiplier_row <- multiplier_grid[j, ]
       current_params <- params
@@ -1415,11 +1410,11 @@ threshold_RCB <- function(params,
       # Output results
       results[[result_index]] <- data.frame(
         persistence_scenario = persistence_row$persistence_scenario,
-        HR_status = multiplier_row$HR_status,
+        ER_status = multiplier_row$ER_status,
         RCB = multiplier_row$RCB,
         recurrence_multiplier = multiplier_row$recurrence_multiplier,
         
-        # Overall survival difference, percentage points
+        # Overall survival difference in percentage points, T-DXd vs T-DM1
         OS_diff_pp = 100 * (as.numeric(outcomes_10y$OS["TDXd"]) -
                               as.numeric(outcomes_10y$OS["TDM1"]))
       )
@@ -1454,8 +1449,8 @@ diff_ild <- dplyr::bind_rows(diff_ild_list)
 
 # Find first ILD multiplier where 10-year OS difference is negative (T-DM1 favored)
 first_neg_diff_ild <- diff_ild %>%
-  arrange(persistence_scenario, HR_status, RCB, threshold) %>%
-  group_by(persistence_scenario, HR_status, RCB) %>%
+  arrange(persistence_scenario, ER_status, RCB, threshold) %>%
+  group_by(persistence_scenario, ER_status, RCB) %>%
   summarise(
     # OS difference < 0
     OS_threshold = if (any(OS_diff_pp < 0)) {
@@ -1482,19 +1477,19 @@ saveRDS(first_neg_diff_ild, "first_neg_diff_ild.rds")
 ## Plots
 # Desired top-to-bottom subgroup ordering
 subgroup_order_top_to_bottom <- c(
-  "RCB-I HR+",
-  "RCB-I HR-",
-  "RCB-II HR+",
-  "RCB-II HR-",
-  "RCB-III HR+",
-  "RCB-III HR-"
+  "RCB-I ER+",
+  "RCB-I ER-",
+  "RCB-II ER+",
+  "RCB-II ER-",
+  "RCB-III ER+",
+  "RCB-III ER-"
 )
 subgroup_levels_for_plot <- rev(subgroup_order_top_to_bottom)
 
 # Colors used for the deterministic plot
 subgroup_colors <- c(
   `FALSE` = "#1D9E75",  # Other subgroups
-  `TRUE`  = "#EF9F27"   # RCB-I HR+
+  `TRUE`  = "#EF9F27"   # RCB-I ER+
 )
 
 # Colors used for the PSA distributions
@@ -1517,13 +1512,13 @@ psa_x_label <- paste0(
 format_subgroups <- function(data) {
   data %>%
     mutate(
-      HR_short = recode(
-        as.character(HR_status),
-        "HR-/HER2+" = "HR-",
-        "HR+/HER2+" = "HR+"
+      ER_short = recode(
+        as.character(ER_status),
+        "ER-/HER2+" = "ER-",
+        "ER+/HER2+" = "ER+"
       ),
       subgroup = factor(
-        paste(RCB, HR_short),
+        paste(RCB, ER_short),
         levels = subgroup_levels_for_plot
       )
     )
@@ -1549,14 +1544,14 @@ det_plots <- lapply(
             ) %>%
             format_subgroups() %>%
             mutate(
-                equivocal = RCB == "RCB-I" & HR_status == "HR+/HER2+"
+                equivocal = RCB == "RCB-I" & ER_status == "ER+/HER2+"
             ) %>%
             select(
-                RCB, HR_status, HR_short, subgroup, equivocal, det_scenario,
+                RCB, ER_status, ER_short, subgroup, equivocal, det_scenario,
                 OS_diff_pp
             ) %>%
             pivot_wider(
-                id_cols = c(RCB, HR_status, HR_short, subgroup, equivocal),
+                id_cols = c(RCB, ER_status, ER_short, subgroup, equivocal),
                 names_from = det_scenario,
                 values_from = OS_diff_pp
             )
@@ -1630,8 +1625,8 @@ names(det_plots) <- persistence_levels
 # Print deterministic plots
 # lapply(det_plots, print)
 det_plots[["Effect ends at year 3"]]
-det_plots[["Waning completed by year 5"]]
-det_plots[["Waning completed by year 7"]]
+#det_plots[["Waning completed by year 5"]]
+#det_plots[["Waning completed by year 7"]]
 det_plots[["Waning completed by year 10"]]
 det_plots[["Persistent through year 10"]]
 
@@ -1645,8 +1640,7 @@ det_plots[["Persistent through year 10"]]
 #    quality = 100
 #)
 
-# Create a separate base-case PSA ridge plot
-# for each treatment-persistence assumption
+# Create a separate base-case PSA ridge plot for each treatment-persistence assumption
 psa_plots <- lapply(
     persistence_levels,
     function(persistence_name) {
@@ -1662,11 +1656,11 @@ psa_plots <- lapply(
                 os_diff = OS_diff_pp
             )
         
-        # Probability that OS difference favors T-DM1
-        pct_tdm1 <- psa_plot_df %>%
+        # Probability that OS difference favors T-DXd
+        pct_tdxd <- psa_plot_df %>%
             group_by(subgroup) %>%
             summarise(
-                p_tdm1 = mean(os_diff < 0, na.rm = TRUE),
+                p_tdxd = mean(os_diff >= 0, na.rm = TRUE),
                 .groups = "drop"
             )
         
@@ -1701,13 +1695,13 @@ psa_plots <- lapply(
             ) +
             
             geom_text(
-                data = pct_tdm1,
+                data = pct_tdxd,
                 aes(
                     x = x_limits[2],
                     y = subgroup,
                     label = sprintf(
-                        "%.0f%% <0",
-                        100 * p_tdm1
+                        "%.0f%% \u22650",
+                        100 * p_tdxd
                     )
                 ),
                 hjust = 1,
@@ -1730,15 +1724,22 @@ psa_plots <- lapply(
             coord_cartesian(
                 xlim = x_limits
             ) +
-            
+          scale_x_continuous(
+            breaks = seq(
+              floor(x_limits[1] / 5) * 5,
+              ceiling(x_limits[2] / 5) * 5,
+              by = 5
+            )
+          ) +
             labs(
-                title = persistence_name,
+                title = "",
                 x = psa_x_label,
                 y = NULL
             ) +
             
             ggridges::theme_ridges(
-                center_axis_labels = TRUE
+                center_axis_labels = TRUE,
+                font_size = 13.5
             ) +
             
             theme(
@@ -1766,18 +1767,19 @@ names(psa_plots) <- persistence_levels
 # Print PSA plots
 # lapply(psa_plots, print)
 psa_plots[["Effect ends at year 3"]]
-psa_plots[["Waning completed by year 5"]]
-psa_plots[["Waning completed by year 7"]]
+#psa_plots[["Waning completed by year 5"]]
+#psa_plots[["Waning completed by year 7"]]
 psa_plots[["Waning completed by year 10"]]
 psa_plots[["Persistent through year 10"]]
 
-#ggsave(
-#    filename = "PSA_persistent_year10.jpeg",
-#    plot = psa_plots[["Persistent through year 10"]],
-#    width = 8,
-#    height = 5.5,
-#    units = "in",
-#    dpi = 600,
-#    quality = 100
-#)
+ggsave(
+    filename = "PSA_persistent_year10_new.jpeg",
+    plot = psa_plots[["Persistent through year 10"]],
+    width = 8,
+    height = 6,
+    units = "in",
+    dpi = 600,
+    quality = 100
+)
+
                         
