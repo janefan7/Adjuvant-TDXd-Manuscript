@@ -52,7 +52,7 @@ haz_OC <- function(age_years) {
 #  lt$haz_mo[idx]
 #}
   
-# ILD inputs from DB-05
+# ILD inputs from DESTINY-Breast05 (DB-05)
 p_any_ILD_TDXd_base <- 0.096
 p_any_ILD_TDM1_base <- 0.016
 any_ild_TDXd <- 77
@@ -72,17 +72,11 @@ prop_fatal_ILD_TDXd <- p_fatal_ILD_all_TDXd_base / p_any_ILD_TDXd_base
 # DB-05 discontinuation probability among nonfatal ILD cases
 prop_dis_given_nonfatal_ILD_TDXd <- dis_TDXd_nonfatal / (any_ild_TDXd - fatal_TDXd)
 
-# Nonfatal ILD discontinuation among any-grade ILD cases, T-DXd
-prop_dis_ILD_TDXd <- (1 - prop_fatal_ILD_TDXd) * prop_dis_given_nonfatal_ILD_TDXd
-
 # T-DM1 fatal ILD assumed 0 in base case
 prop_fatal_ILD_TDM1 <- 0
 
-# Discontinuation among any-grade ILD cases, T-DM1
-prop_dis_ILD_TDM1 <- dis_TDM1 / any_ild_TDM1
-
 # No fatal ILD for T-DM1 in DB-05
-prop_dis_given_nonfatal_ILD_TDM1 <- prop_dis_ILD_TDM1
+prop_dis_given_nonfatal_ILD_TDM1 <- dis_TDM1 / any_ild_TDM1
 
 ## Helpers
 # Clip probabilities between 0 and 1
@@ -430,9 +424,6 @@ p_fatal_ILD_all_TDXd_calib <-
   p_any_ILD_TDXd_base * prop_fatal_ILD_TDXd_calib # fatal ILD among all T-DXd-assigned patients
 prop_dis_given_nonfatal_ILD_TDXd_calib <-
   dis_TDXd_nonfatal / (any_ild_TDXd - fatal_TDXd) # discontinuation among nonfatal ILD
-prop_dis_ILD_TDXd_calib <-
-  (1 - prop_fatal_ILD_TDXd_calib) * 
-  prop_dis_given_nonfatal_ILD_TDXd_calib # discontinuation among any-grade ILD
 
 # Specify all parameters needed for calibration
 l_params_calib <- list(
@@ -463,9 +454,6 @@ l_params_calib <- list(
   p_fatal_ILD_all_TDXd = p_fatal_ILD_all_TDXd_calib,
   prop_fatal_ILD_TDM1  = 0,
   prop_fatal_ILD_TDXd  = prop_fatal_ILD_TDXd_calib,
-  
-  #prop_dis_ILD_TDM1 = prop_dis_ILD_TDM1,
-  #prop_dis_ILD_TDXd = prop_dis_ILD_TDXd_calib,
   
   prop_dis_given_nonfatal_ILD_TDM1 = prop_dis_given_nonfatal_ILD_TDM1,
   prop_dis_given_nonfatal_ILD_TDXd = prop_dis_given_nonfatal_ILD_TDXd_calib,
@@ -816,8 +804,8 @@ ggplot(df_plot, aes(x = Outcome, y = value, ymin = lb, ymax = ub,
                 linewidth = 0.9) +
   geom_point(position = position_dodge(width = 0.55), size = 2.5) +
   facet_wrap(~ Arm) +
-  scale_y_continuous(limits = c(0, 1)) +
-  labs(y = "3-year probability") +
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+  labs(y = "3-year survival") +
   theme_bw(base_size = 18) +
   theme(legend.position = "bottom") +
   scale_color_manual(values = c(Model = "steelblue3", Target = "black"))
@@ -864,9 +852,6 @@ l_params_all <- list(
   prop_fatal_ILD_TDM1 = prop_fatal_ILD_TDM1,
   prop_fatal_ILD_TDXd = prop_fatal_ILD_TDXd,
   
-  #prop_dis_ILD_TDM1 = prop_dis_ILD_TDM1,
-  #prop_dis_ILD_TDXd = prop_dis_ILD_TDXd,
-  
   prop_dis_given_nonfatal_ILD_TDM1 = prop_dis_given_nonfatal_ILD_TDM1,
   prop_dis_given_nonfatal_ILD_TDXd = prop_dis_given_nonfatal_ILD_TDXd,
   
@@ -876,7 +861,7 @@ l_params_all <- list(
     0.89, 0.94, 0.97, 0.99, 1.00
   )
 )
-saveRDS(l_params_all, "l_params_all_basecase.rds")
+saveRDS(l_params_all, "l_params_all.rds")
 
 ## Map DR hazard to RCB categories and ER subgroups
 # 5-year scaled T-DM1 (baseline) EFS from Yau et al
@@ -956,12 +941,10 @@ haz_LRR_DR_common <- as.numeric(l_params_all$LRR_DR_multiplier * haz_RF_DR_max)
 
 # Treatment persistence scenarios
 treatment_effect_scenarios <- data.frame(persistence_scenario = c("Effect ends at year 3",
-                                                                  "Waning completed by year 5",
-                                                                  "Waning completed by year 7",
                                                                   "Waning completed by year 10",
                                                                   "Persistent through year 10"),
-                                         hr_full_effect_years = c(3,3,3,3,10),
-                                         hr_wane_end_year = c(3,5,7,10,10))
+                                         hr_full_effect_years = c(3,3,10),
+                                         hr_wane_end_year = c(NA,10,NA))
 
 # Model input scenarios (base case + 3 clinically relevant edge cases) 
 base_case <- function(params) {
@@ -986,110 +969,6 @@ combined <- function(params) {
   params <- higher_ild_incidence(params)
   params
 }
-
-# Named scenarios for optional deterministic analyses
-det_scenarios <- list(
-  "Base case" = base_case,
-  "HR 0.80" = weaker_hr,
-  "Any-grade ILD incidence x2" = higher_ild_incidence,
-  "Combined" = combined
-)
-det_scenario_order <- names(det_scenarios)
-
-## Optional deterministic analyses (not described in manuscript)
-# Evaluate each scenario across RCB categories and ER subgroups
-eval_os_RCB <- function(params,
-                        det_scenario_name,
-                        det_scenario_modify = function(params) params) {
-  # Initialize results list
-  results <- vector("list", nrow(treatment_effect_scenarios)*
-                      nrow(RCB_EFS_scaled_multiplier))
-  result_index <- 1
-  
-  # Loop over all treatment persistence scenarios
-  for (j in seq_len(nrow(treatment_effect_scenarios))) {
-    persistence_row <- treatment_effect_scenarios[j, ]
-    
-    # Loop over all DR multipliers (corresponding to RCB/ER subgroups)
-    for (i in seq_len(nrow(RCB_EFS_scaled_multiplier))) {
-      
-      multiplier_row <- RCB_EFS_scaled_multiplier[i, ]
-      
-      current_params <- params
-      
-      # Set treatment persistence scenario
-      current_params$hr_full_effect_years <- persistence_row$hr_full_effect_years
-      current_params$hr_wane_end_year <- persistence_row$hr_wane_end_year
-      
-      # Set RCB/ER-specific baseline T-DM1 DR hazard
-      current_params$haz_RF_DR_TDM1 <- multiplier_row$haz_RF_DR_TDM1
-      
-      # Set RCB/ER-specific LRR hazard (same for T-DM1 and T-DXd)
-      current_params$haz_RF_LRR <- multiplier_row$haz_RF_LRR
-      
-      # Set common LRR to DR hazard (same across subgroups and treatment arms)
-      current_params$haz_LRR_DR <- haz_LRR_DR_common
-        
-      # Apply scenario after setting subgroup-specific hazards
-      current_params <- det_scenario_modify(current_params)
-      
-      # Run Markov model
-      outcomes_10y <- run_markov_model(params = current_params)
-      
-      # Output results for this scenario
-      results[[result_index]] <- data.frame(
-        det_scenario = det_scenario_name,
-        persistence_scenario = persistence_row$persistence_scenario,
-        ER_status = multiplier_row$ER_status,
-        RCB = multiplier_row$RCB,
-        
-        # Overall survival difference in percentage points, T-DXd vs T-DM1
-        OS_10y_TDM1 = as.numeric(outcomes_10y$OS["TDM1"]),
-        OS_10y_TDXd = as.numeric(outcomes_10y$OS["TDXd"]),
-        OS_diff_pp = 100 * (OS_10y_TDXd - OS_10y_TDM1),
-        
-        # Breast cancer deaths averted with T-DXd vs T-DM1, per 1,000
-        BC_death_10y_TDM1 = as.numeric(outcomes_10y$BC_death["TDM1"]),
-        BC_death_10y_TDXd = as.numeric(outcomes_10y$BC_death["TDXd"]),
-        BC_death_diff_per1000 = 1000 * (BC_death_10y_TDM1 - BC_death_10y_TDXd),
-        
-        # ILD deaths caused by T-DXd, per 1,000
-        ILD_death_10y_TDM1 = as.numeric(outcomes_10y$ILD_death["TDM1"]),
-        ILD_death_10y_TDXd = as.numeric(outcomes_10y$ILD_death["TDXd"]),
-        ILD_death_diff_per1000 = 1000 * (ILD_death_10y_TDXd - ILD_death_10y_TDM1)
-  
-      )
-      result_index <- result_index + 1
-    }
-  }
-  dplyr::bind_rows(results)
-}
-
-# Run deterministic analysis for each scenario
-df_os_RCB_list <- list()
-
-for (s in seq_along(det_scenarios)) {
-  det_scenario_name <- names(det_scenarios)[s]
-  det_scenario_modify <- det_scenarios[[s]]
-  
-  cat("Running deterministic analysis:", det_scenario_name, "\n")
-  
-  df_os_RCB_list[[s]] <- eval_os_RCB(
-    params = l_params_all,
-    det_scenario_name = det_scenario_name,
-    det_scenario_modify = det_scenario_modify
-  )
-}
-
-# Summarize deterministic analysis
-df_os_RCB <- dplyr::bind_rows(df_os_RCB_list) %>%
-  mutate(det_scenario = factor(det_scenario, levels = det_scenario_order),
-         persistence_scenario = factor(persistence_scenario, levels = 
-                                         treatment_effect_scenarios$persistence_scenario)) %>%
-  arrange(persistence_scenario, ER_status, RCB, det_scenario)
-
-# Save results
-saveRDS(df_os_RCB, "df_os_RCB.rds")
 
 # Named scenarios for probabilistic sensitivity analysis (PSA)
 psa_scenarios <- list(
@@ -1258,15 +1137,13 @@ eval_os_RCB_PSA <- function(params, psa_scenario_name, psa_scenario_modify,
             p_dis_ILD_all_TDXd <- p_nonfatal_ILD_all_TDXd * 
                 prop_dis_given_nonfatal_ILD_TDXd
             
-            # Convert to proportions among any-grade ILD cases
+            # Convert to proportion among any-grade ILD cases
             prop_fatal_ILD_TDXd <- p_fatal_ILD_all_TDXd / p_any_ILD_TDXd
-            prop_dis_ILD_TDXd <- p_dis_ILD_all_TDXd / p_any_ILD_TDXd
             
             # Assign ILD parameters used by the model
             current_params$p_any_ILD_TDXd <- p_any_ILD_TDXd
             current_params$p_fatal_ILD_all_TDXd <- p_fatal_ILD_all_TDXd
             current_params$prop_fatal_ILD_TDXd <- prop_fatal_ILD_TDXd
-            current_params$prop_dis_ILD_TDXd <- prop_dis_ILD_TDXd
             current_params$prop_dis_given_nonfatal_ILD_TDXd <-
               prop_dis_given_nonfatal_ILD_TDXd
             
@@ -1372,7 +1249,7 @@ table_os_RCB_psa
 saveRDS(df_os_RCB_psa, "df_os_RCB_psa.rds")
 saveRDS(table_os_RCB_psa, "table_os_RCB_psa.rds")
 
-## One-way ILD threshold analysis
+## One-way ILD deterministic threshold analysis
 threshold_RCB <- function(params,
                              scenario_modify = function(params) params,
                              multiplier_grid = RCB_EFS_scaled_multiplier) {
@@ -1474,7 +1351,7 @@ first_neg_diff_ild <- first_neg_diff_ild %>%
 saveRDS(diff_ild, "diff_ild.rds")
 saveRDS(first_neg_diff_ild, "first_neg_diff_ild.rds")
 
-## Plots
+## Probabilistic distribution plots
 # Desired top-to-bottom subgroup ordering
 subgroup_order_top_to_bottom <- c(
   "RCB-I ER+",
@@ -1486,29 +1363,19 @@ subgroup_order_top_to_bottom <- c(
 )
 subgroup_levels_for_plot <- rev(subgroup_order_top_to_bottom)
 
-# Colors used for the deterministic plot
-subgroup_colors <- c(
-  `FALSE` = "#1D9E75",  # Other subgroups
-  `TRUE`  = "#EF9F27"   # RCB-I ER+
-)
-
 # Colors used for the PSA distributions
 distribution_side_colors <- c(
   `TRUE`  = "#F2C94C",  # OS difference < 0: favors T-DM1
   `FALSE` = "#1D9E75"   # OS difference >= 0: favors T-DXd
 )
 
-# Shared axis labels
-deterministic_x_label <- paste0(
-  "Difference in 10-year OS, percentage points\n",
-  "Positive values favor T-DXd"
-)
+# X-axis label
 psa_x_label <- paste0(
   "Difference in 10-year OS, percentage points ",
   "(T-DXd minus T-DM1)"
 )
 
-# Shared formatting
+# Formatting
 format_subgroups <- function(data) {
   data %>%
     mutate(
@@ -1527,118 +1394,9 @@ format_subgroups <- function(data) {
 # Treatment-persistence assumptions
 persistence_levels <- c(
     "Effect ends at year 3",
-    "Waning completed by year 5",
-    "Waning completed by year 7",
     "Waning completed by year 10",
     "Persistent through year 10"
 )
-
-det_plots <- lapply(
-    persistence_levels,
-    function(persistence_name) {
-        # Deterministic dumbbell plot
-        det_plot_df <- df_os_RCB %>%
-            filter(
-                persistence_scenario == persistence_name,
-                det_scenario %in% c("Base case", "Combined")
-            ) %>%
-            format_subgroups() %>%
-            mutate(
-                equivocal = RCB == "RCB-I" & ER_status == "ER+/HER2+"
-            ) %>%
-            select(
-                RCB, ER_status, ER_short, subgroup, equivocal, det_scenario,
-                OS_diff_pp
-            ) %>%
-            pivot_wider(
-                id_cols = c(RCB, ER_status, ER_short, subgroup, equivocal),
-                names_from = det_scenario,
-                values_from = OS_diff_pp
-            )
-        
-        gg_det_dumbbell <- ggplot(det_plot_df) +
-            geom_vline(xintercept = 0, colour = "grey55", linewidth = 0.5) +
-            
-            geom_segment(
-                aes(
-                    x = Combined, xend = `Base case`,
-                    y = subgroup, yend = subgroup,
-                    colour = equivocal
-                ),
-                linewidth = 1.1
-            ) +
-            
-            geom_point(
-                aes(x = Combined, y = subgroup),
-                shape = 21, size = 3, fill = "white",
-                stroke = 1, colour = "grey45"
-            ) +
-            
-            geom_point(
-                aes(x = `Base case`, y = subgroup, colour = equivocal),
-                size = 3.4
-            ) +
-            
-            geom_text(
-                aes(
-                    x = `Base case`,
-                    y = subgroup,
-                    label = sprintf("%+.1f", `Base case`)
-                ),
-                vjust = -1.1,
-                size = 3
-            ) +
-            
-            geom_text(
-                aes(
-                    x = Combined,
-                    y = subgroup,
-                    label = sprintf("%+.1f", Combined)
-                ),
-                vjust = -1.1,
-                size = 3,
-                colour = "grey45"
-            ) +
-            
-            scale_colour_manual(values = subgroup_colors, guide = "none") +
-            
-            labs(
-                x = deterministic_x_label,
-                y = NULL,
-                title = persistence_name
-            ) +
-            
-            theme_minimal(base_size = 12) +
-            
-            theme(
-                panel.grid.major.y = element_blank(),
-                panel.grid.minor = element_blank()
-            )
-        
-        return(gg_det_dumbbell)
-    }
-)
-        
-# Name each plot by its persistence assumption
-names(det_plots) <- persistence_levels
-
-# Print deterministic plots
-# lapply(det_plots, print)
-det_plots[["Effect ends at year 3"]]
-#det_plots[["Waning completed by year 5"]]
-#det_plots[["Waning completed by year 7"]]
-det_plots[["Waning completed by year 10"]]
-det_plots[["Persistent through year 10"]]
-
-#ggsave(
-#    filename = "det_persistent_year10.jpeg",
-#    plot = det_plots[["Persistent through year 10"]],
-#    width = 8,
-#    height = 5.5,
-#    units = "in",
-#    dpi = 600,
-#    quality = 100
-#)
 
 # Create a separate base-case PSA ridge plot for each treatment-persistence assumption
 psa_plots <- lapply(
@@ -1767,8 +1525,6 @@ names(psa_plots) <- persistence_levels
 # Print PSA plots
 # lapply(psa_plots, print)
 psa_plots[["Effect ends at year 3"]]
-#psa_plots[["Waning completed by year 5"]]
-#psa_plots[["Waning completed by year 7"]]
 psa_plots[["Waning completed by year 10"]]
 psa_plots[["Persistent through year 10"]]
 
@@ -1781,5 +1537,3 @@ ggsave(
     dpi = 600,
     quality = 100
 )
-
-                        
