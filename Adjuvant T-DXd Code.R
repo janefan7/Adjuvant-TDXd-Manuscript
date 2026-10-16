@@ -60,9 +60,11 @@ any_ild_TDM1 <- 13
 dis_TDXd_nonfatal <- 59
 fatal_TDXd <- 2
 dis_TDM1 <- 5
+n_TDXd <- 806
 n_TDM1 <- 801
 
-## ILD inputs in deterministic analyses, base case ##
+
+## ILD inputs in deterministic analyses, base case (with conservative fatal ILD risk assumption) ##
 # Overall fatal ILD probability among all T-DXd-assigned patients
 p_fatal_ILD_all_TDXd_base <- 0.01
 
@@ -113,15 +115,15 @@ get_hr_RF_DR <- function(t, arm, params) {
   if (time_years <= params$hr_full_effect_years) {
     hr_t <- hr_initial
   }
-  # Treatment effect has fully waned by hr_wane_end_year
-  else if (time_years >= params$hr_wane_end_year) {
+  # Treatment effect has fully waned by hr_effect_end_year
+  else if (time_years >= params$hr_effect_end_year) {
     hr_t <- 1
   }
   else {
-    # Linear waning from hr_full_effect_years to hr_wane_end_year
+    # Linear waning from hr_full_effect_years to hr_effect_end_year
     time_years_since_waning <- time_years - params$hr_full_effect_years
     linear_slope <- (1 - hr_initial) / 
-      (params$hr_wane_end_year - params$hr_full_effect_years)
+      (params$hr_effect_end_year - params$hr_full_effect_years)
     hr_t <- hr_initial + time_years_since_waning * linear_slope
   }
   hr_t
@@ -435,7 +437,7 @@ l_params_calib <- list(
   
   # Treatment-effect persistence assumptions
   hr_full_effect_years   = 3,
-  hr_wane_end_year       = 10,
+  hr_effect_end_year       = 10,
   
   # Placeholders overwritten during calibration
   haz_RF_LRR            = NA_real_,
@@ -829,7 +831,7 @@ l_params_all <- list(
   
   # Treatment-effect persistence assumptions
   hr_full_effect_years   = 3,
-  hr_wane_end_year       = 10,
+  hr_effect_end_year       = 10,
   
   # Calibrated parameters
   haz_RF_LRR            = haz_RF_LRR_post,
@@ -846,14 +848,25 @@ l_params_all <- list(
   # ILD parameters
   p_any_ILD_TDM1 = p_any_ILD_TDM1_base,
   p_any_ILD_TDXd = p_any_ILD_TDXd_base,
-  
-  p_fatal_ILD_all_TDXd = p_fatal_ILD_all_TDXd_base,
-  
   prop_fatal_ILD_TDM1 = prop_fatal_ILD_TDM1,
-  prop_fatal_ILD_TDXd = prop_fatal_ILD_TDXd,
-  
   prop_dis_given_nonfatal_ILD_TDM1 = prop_dis_given_nonfatal_ILD_TDM1,
   prop_dis_given_nonfatal_ILD_TDXd = prop_dis_given_nonfatal_ILD_TDXd,
+  
+  # Base-case fatal ILD probability among all T-DXd-assigned patients that accounts 
+  # for potential underestimation of real-world toxicity in DB-05
+  p_fatal_ILD_all_TDXd = p_fatal_ILD_all_TDXd_base, ## comment out this line for scenario analysis
+  
+  # Base-case fatal ILD probability among any-grade ILD for T-DXd in scenario analysis 
+  # derived using base-case fatal ILD probability among all T-DXd-assigned patients and p_any_ILD_TDXd
+  prop_fatal_ILD_TDXd = prop_fatal_ILD_TDXd, ## comment out this line for scenario analysis
+  
+  # Use DB-05-based fatal ILD probability among all T-DXd-assigned patients for scenario analysis
+  # (same quantity as in calibration)
+  # p_fatal_ILD_all_TDXd = p_fatal_ILD_all_TDXd_calib, ## uncomment this line for scenario analysis
+  
+  # Use DB-05-based fatal ILD probability among any-grade ILD for T-DXd in scenario analysis
+  # (same quantity as in calibration)
+  # prop_fatal_ILD_TDXd = prop_fatal_ILD_TDXd_calib, ## uncomment this line for scenario analysis
   
   # A-priori-specified fractional benefit following ILD discontinuation
   benefit_frac_postILD = c(
@@ -944,7 +957,7 @@ treatment_effect_scenarios <- data.frame(persistence_scenario = c("Effect ends a
                                                                   "Waning completed by year 10",
                                                                   "Persistent through year 10"),
                                          hr_full_effect_years = c(3,3,10),
-                                         hr_wane_end_year = c(NA,10,NA))
+                                         hr_effect_end_year = c(3,10,10))
 
 # Model input scenarios (base case + 3 clinically relevant edge cases) 
 base_case <- function(params) {
@@ -993,7 +1006,8 @@ draw_prob_logitnormal <- function(mu, lower_95, upper_95, n_sim) {
 set.seed(1)
 calib_param_draws <- as.data.frame(post_draws)
 
-# Any-grade ILD probability over treatment window: T-DXd
+# Any-grade ILD probability over treatment window: T-DXd; parameterized based on 
+# DB-05, Powell et al, and clinical expertise
 p_any_ILD_TDXd_draw <- draw_prob_logitnormal(
   mu = 0.096,
   lower_95 = 0.05,
@@ -1001,20 +1015,31 @@ p_any_ILD_TDXd_draw <- draw_prob_logitnormal(
   n_sim = n_sim
 )
 
-# Any-grade ILD probability over treatment window: T-DM1; uniform Beta(1,1) prior
+# Any-grade ILD probability over treatment window: T-DM1; parameterized using
+# DB-05 counts and uniform Beta(1,1) prior
 p_any_ILD_TDM1_draw <- rbeta(
   n = n_sim,
   shape1 = any_ild_TDM1 + 1,
   shape2 = n_TDM1 - any_ild_TDM1 + 1
 )
 
-# Overall fatal ILD probability among all T-DXd-assigned patients
+# Base-case fatal ILD probability distribution among all T-DXd-assigned patients
+# parameterized using Powell et al and clinical expertise to account for potential 
+# underestimation of real-world toxicity in DB-05
 p_fatal_ILD_all_TDXd_draw <- draw_prob_logitnormal(
   mu = 0.01,
   lower_95 = 0.002,
   upper_95 = 0.030,
   n_sim = n_sim
-)
+) ## comment lines 1029-1034 for scenario analysis
+
+# Scenario analysis fatal ILD probability among all T-DXd-assigned patients
+# parameterized using DB-05 counts and uniform Beta(1,1) prior
+# p_fatal_ILD_all_TDXd_draw <- rbeta(
+#  n = n_sim,
+#  shape1 = fatal_TDXd + 1,
+#  shape2 = n_TDXd - fatal_TDXd + 1
+# ) ## uncomment lines 1038-1042 for scenario analysis
 
 # Histograms of PSA draws
 hist(calib_param_draws$haz_RF_DR_base)
@@ -1152,7 +1177,7 @@ eval_os_RCB_PSA <- function(params, psa_scenario_name, psa_scenario_modify,
               persistence_row <- treatment_effect_scenarios[j,]
               persistence_params <- current_params
               persistence_params$hr_full_effect_years <- persistence_row$hr_full_effect_years
-              persistence_params$hr_wane_end_year <- persistence_row$hr_wane_end_year
+              persistence_params$hr_effect_end_year <- persistence_row$hr_effect_end_year
               
               # Run Markov model
               outcomes_10y <- run_markov_model(params = persistence_params)
@@ -1167,17 +1192,20 @@ eval_os_RCB_PSA <- function(params, psa_scenario_name, psa_scenario_modify,
                 # Overall survival difference in percentage points, T-DXd vs T-DM1
                 OS_10y_TDM1 = as.numeric(outcomes_10y$OS["TDM1"]),
                 OS_10y_TDXd = as.numeric(outcomes_10y$OS["TDXd"]),
-                OS_diff_pp = 100 * (OS_10y_TDXd - OS_10y_TDM1),
+                OS_diff_pp = 100 * (as.numeric(outcomes_10y$OS["TDXd"]) - 
+                                      as.numeric(outcomes_10y$OS["TDM1"])),
               
                 # Breast cancer deaths averted with T-DXd vs T-DM1, per 1,000
                 BC_death_10y_TDM1 = as.numeric(outcomes_10y$BC_death["TDM1"]),
                 BC_death_10y_TDXd = as.numeric(outcomes_10y$BC_death["TDXd"]),
-                BC_death_diff_per1000 = 1000 * (BC_death_10y_TDM1 - BC_death_10y_TDXd),
+                BC_death_diff_per1000 = 1000 * (as.numeric(outcomes_10y$BC_death["TDM1"]) - 
+                                                  as.numeric(outcomes_10y$BC_death["TDXd"])),
                 
                 # ILD deaths caused by T-DXd, per 1,000
                 ILD_death_10y_TDM1 = as.numeric(outcomes_10y$ILD_death["TDM1"]),
                 ILD_death_10y_TDXd = as.numeric(outcomes_10y$ILD_death["TDXd"]),
-                ILD_death_diff_per1000 = 1000 * (ILD_death_10y_TDXd - ILD_death_10y_TDM1)
+                ILD_death_diff_per1000 = 1000 * (as.numeric(outcomes_10y$ILD_death["TDXd"]) - 
+                                                   as.numeric(outcomes_10y$ILD_death["TDM1"]))
                 )
               
               result_index <- result_index + 1
@@ -1249,6 +1277,13 @@ table_os_RCB_psa
 saveRDS(df_os_RCB_psa, "df_os_RCB_psa.rds")
 saveRDS(table_os_RCB_psa, "table_os_RCB_psa.rds")
 
+# Compute 95% uncertainty interval for fatal ILD among any-grade ILD, T-DXd, as
+# this parameter's distribution was derived based on the distributions of other sampled inputs
+prop_fatal_ILD_TDXd_quantiles <- quantile(pmin(p_fatal_ILD_all_TDXd_draw,
+                                         0.99 * p_any_ILD_TDXd_draw) / p_any_ILD_TDXd_draw, 
+                                     c(0.025, 0.5, 0.975))
+prop_fatal_ILD_TDXd_quantiles
+
 ## One-way ILD deterministic threshold analysis
 threshold_RCB <- function(params,
                              scenario_modify = function(params) params,
@@ -1269,7 +1304,7 @@ threshold_RCB <- function(params,
       
       # Set treatment persistence scenarios
       current_params$hr_full_effect_years <- persistence_row$hr_full_effect_years
-      current_params$hr_wane_end_year <- persistence_row$hr_wane_end_year
+      current_params$hr_effect_end_year <- persistence_row$hr_effect_end_year
       
       # Set subgroup-specific hazards
       current_params$haz_RF_DR_TDM1 <- multiplier_row$haz_RF_DR_TDM1
